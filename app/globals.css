@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(15, 139, 109, 0.18), transparent 22%),
+    radial-gradient(circle at bottom right, rgba(190, 92, 75, 0.12), transparent 24%),
+    linear-gradient(180deg, #f8f3ea 0%, #f3ede2 100%);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.glass {
+  @apply border border-white/60 bg-white/75 shadow-soft backdrop-blur-xl;
+}
+
+.section-title {
+  @apply text-2xl font-semibold tracking-tight text-ink;
+}
+
+.field {
+  @apply w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-moss focus:ring-2 focus:ring-moss/15;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center rounded-2xl px-4 py-3 text-sm font-medium transition;
+}
+
+.btn-primary {
+  @apply btn bg-moss text-white hover:bg-pine;
+}
+
+.btn-secondary {
+  @apply btn border border-slate-200 bg-white text-slate-900 hover:border-slate-300;
+}
+
+.btn-danger {
+  @apply btn bg-coral text-white hover:opacity-90;
+}
+
+.card {
+  @apply rounded-[28px] border border-white/60 bg-white/80 p-5 shadow-soft backdrop-blur-xl;
+}
