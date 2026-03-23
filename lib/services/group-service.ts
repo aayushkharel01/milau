@@ -4,6 +4,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
   serverTimestamp,
@@ -122,14 +123,56 @@ export async function createGroup(input: GroupFormValues, actor: UserProfile) {
       message: `${actor.displayName} created ${input.name.trim()}`
     });
 
+    const savedGroupSnapshot = await getDoc(groupRef);
+    if (!savedGroupSnapshot.exists()) {
+      throw new Error("The group was created, but we could not load it right away.");
+    }
+
+    const savedGroup = mapGroup(savedGroupSnapshot.id, savedGroupSnapshot.data());
+    logFirestoreDebug("createGroup:savedGroup", {
+      docId: savedGroup.id,
+      inviteCode: savedGroup.inviteCode,
+      memberIds: savedGroup.memberIds
+    });
+
+    if (!savedGroup.memberIds.includes(actor.uid)) {
+      throw new Error("The group was saved without your membership. Please try again.");
+    }
+
+    if (!savedGroup.inviteCode || !savedGroup.inviteUrl) {
+      throw new Error("The group was created, but its invite details are not ready yet.");
+    }
+
     logFirestoreDebug("createGroup:complete", {
       groupId: groupRef.id,
       creator: actor.uid
     });
 
-    return createdGroup;
+    return savedGroup;
   } catch (error) {
     logFirestoreError("createGroup", error);
+    throw error;
+  }
+}
+
+export async function fetchGroupsForUser(uid: string) {
+  logFirestoreDebug("fetchGroupsForUser:start", {
+    uid,
+    collection: "groups",
+    field: "memberIds",
+    operator: "array-contains"
+  });
+
+  try {
+    const snapshot = await getDocs(query(collection(getFirebaseDb(), "groups"), where("memberIds", "array-contains", uid)));
+    const groups = sortGroups(snapshot.docs.map((entry) => mapGroup(entry.id, entry.data())));
+    logFirestoreDebug("fetchGroupsForUser:result", {
+      uid,
+      groupIds: groups.map((group) => group.id)
+    });
+    return groups;
+  } catch (error) {
+    logFirestoreError("fetchGroupsForUser", error);
     throw error;
   }
 }

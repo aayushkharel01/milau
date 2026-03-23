@@ -23,7 +23,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/providers/auth-provider";
 import { signOutUser } from "@/lib/services/auth-service";
 import { createExpense, deleteExpense, subscribeToExpenses, updateExpense } from "@/lib/services/expense-service";
-import { createGroup, joinGroupByInviteCode, refreshGroupInvite, subscribeToGroups } from "@/lib/services/group-service";
+import { createGroup, fetchGroupsForUser, joinGroupByInviteCode, refreshGroupInvite, subscribeToGroups } from "@/lib/services/group-service";
 import {
   markNotificationAsRead,
   subscribeToActivities,
@@ -307,7 +307,14 @@ export function DashboardShell() {
 
     try {
       const group = await createGroup(groupForm, profile);
-      upsertGroup(group);
+      const refreshedGroups = await fetchGroupsForUser(profile.uid);
+      const nextGroups = refreshedGroups.some((entry) => entry.id === group.id)
+        ? refreshedGroups
+        : [group, ...refreshedGroups];
+      console.info("[Milau] groups after create", nextGroups.map((entry) => entry.id));
+      setGroups(
+        nextGroups.sort((left, right) => (right.updatedAt || "").localeCompare(left.updatedAt || ""))
+      );
       setGroupForm({
         name: "",
         description: "",
@@ -315,7 +322,12 @@ export function DashboardShell() {
       });
       setSelectedGroupId(group.id);
       setTab("groups");
-      showFlash("success", "Group created. Share the invite code or link with your friends.");
+      showFlash(
+        "success",
+        group.inviteCode && group.inviteUrl
+          ? "Group created. Your invite code and share link are ready."
+          : "Group created."
+      );
     } catch (error) {
       showFlash("error", userFacingMessage(error, "We couldn't create the group right now."));
     } finally {
