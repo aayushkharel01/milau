@@ -5,7 +5,6 @@ import {
   doc,
   getDoc,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -40,6 +39,10 @@ function mapGroup(id: string, data: Record<string, unknown>) {
   } as Group;
 }
 
+function sortGroups(groups: Group[]) {
+  return [...groups].sort((left, right) => (right.updatedAt || "").localeCompare(left.updatedAt || ""));
+}
+
 function mapInvite(id: string, data: Record<string, unknown>) {
   return {
     code: id,
@@ -67,8 +70,9 @@ export async function createGroup(input: GroupFormValues, actor: UserProfile) {
     const groupRef = doc(collection(getFirebaseDb(), "groups"));
     const inviteCode = makeInviteCode(12);
     const inviteUrl = inviteUrlForCode(inviteCode);
-
-    await setDoc(groupRef, {
+    const now = new Date().toISOString();
+    const createdGroup: Group = {
+      id: groupRef.id,
       name: input.name.trim(),
       description: input.description.trim(),
       currency: input.currency,
@@ -76,8 +80,25 @@ export async function createGroup(input: GroupFormValues, actor: UserProfile) {
       memberIds: [actor.uid],
       inviteCode,
       inviteUrl,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    await setDoc(groupRef, {
+      name: createdGroup.name,
+      description: createdGroup.description,
+      currency: createdGroup.currency,
+      createdBy: createdGroup.createdBy,
+      memberIds: createdGroup.memberIds,
+      inviteCode: createdGroup.inviteCode,
+      inviteUrl: createdGroup.inviteUrl,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
+    });
+    logFirestoreDebug("createGroup:groupWritten", {
+      collection: "groups",
+      docId: groupRef.id,
+      memberIds: createdGroup.memberIds
     });
 
     await setDoc(doc(getFirebaseDb(), "invites", inviteCode), {
@@ -88,6 +109,11 @@ export async function createGroup(input: GroupFormValues, actor: UserProfile) {
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
+    logFirestoreDebug("createGroup:inviteWritten", {
+      collection: "invites",
+      docId: inviteCode,
+      groupId: groupRef.id
+    });
 
     await createActivity({
       groupId: groupRef.id,
@@ -96,7 +122,12 @@ export async function createGroup(input: GroupFormValues, actor: UserProfile) {
       message: `${actor.displayName} created ${input.name.trim()}`
     });
 
-    return groupRef.id;
+    logFirestoreDebug("createGroup:complete", {
+      groupId: groupRef.id,
+      creator: actor.uid
+    });
+
+    return createdGroup;
   } catch (error) {
     logFirestoreError("createGroup", error);
     throw error;
@@ -167,12 +198,21 @@ export function subscribeToGroups(
   onChange: (groups: Group[]) => void,
   onError?: (error: Error) => void
 ) {
-  logFirestoreDebug("subscribeToGroups:start", { uid });
+  logFirestoreDebug("subscribeToGroups:start", {
+    uid,
+    collection: "groups",
+    field: "memberIds",
+    operator: "array-contains"
+  });
   return onSnapshot(
-    query(collection(getFirebaseDb(), "groups"), where("memberIds", "array-contains", uid), orderBy("updatedAt", "desc")),
+    query(collection(getFirebaseDb(), "groups"), where("memberIds", "array-contains", uid)),
     (snapshot) => {
-      logFirestoreDebug("subscribeToGroups:update", { uid, groups: snapshot.docs.length });
-      const groups = snapshot.docs.map((entry) => mapGroup(entry.id, entry.data()));
+      const groups = sortGroups(snapshot.docs.map((entry) => mapGroup(entry.id, entry.data())));
+      logFirestoreDebug("subscribeToGroups:update", {
+        uid,
+        groups: groups.length,
+        groupIds: groups.map((group) => group.id)
+      });
       onChange(groups);
     },
     (error) => {

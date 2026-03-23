@@ -5,7 +5,6 @@ import {
   doc,
   getDocs,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -41,6 +40,10 @@ function mapExpense(id: string, data: Record<string, unknown>) {
     createdAt: serializeTimestamp(data.createdAt),
     updatedAt: serializeTimestamp(data.updatedAt)
   } as Expense;
+}
+
+function sortExpenses(expenses: Expense[]) {
+  return [...expenses].sort((left, right) => (right.createdAt || "").localeCompare(left.createdAt || ""));
 }
 
 function ensureExpenseInput(input: ExpenseFormValues, group: Group) {
@@ -165,18 +168,21 @@ export async function deleteExpense(expense: Expense, actor: UserProfile, groupN
 
 export async function fetchExpensesForGroupIds(groupIds: string[]) {
   if (!groupIds.length) return [];
-  logFirestoreDebug("fetchExpensesForGroupIds:start", { groupIds });
+  logFirestoreDebug("fetchExpensesForGroupIds:start", {
+    groupIds,
+    collection: "expenses",
+    field: "groupId",
+    operator: "in"
+  });
 
   try {
     const snapshots = await Promise.all(
       chunk(groupIds, 10).map((groupChunk) =>
-        getDocs(query(collection(getFirebaseDb(), "expenses"), where("groupId", "in", groupChunk), orderBy("createdAt", "desc")))
+        getDocs(query(collection(getFirebaseDb(), "expenses"), where("groupId", "in", groupChunk)))
       )
     );
 
-    return snapshots
-      .flatMap((snapshot) => snapshot.docs.map((entry) => mapExpense(entry.id, entry.data())))
-      .sort((left, right) => (right.createdAt || "").localeCompare(left.createdAt || ""));
+    return sortExpenses(snapshots.flatMap((snapshot) => snapshot.docs.map((entry) => mapExpense(entry.id, entry.data()))));
   } catch (error) {
     logFirestoreError("fetchExpensesForGroupIds", error);
     throw error;
@@ -196,7 +202,7 @@ export function subscribeToExpenses(
   logFirestoreDebug("subscribeToExpenses:start", { groupIds });
   const unsubscribers = chunk(groupIds, 10).map((groupChunk) =>
     onSnapshot(
-      query(collection(getFirebaseDb(), "expenses"), where("groupId", "in", groupChunk), orderBy("createdAt", "desc")),
+      query(collection(getFirebaseDb(), "expenses"), where("groupId", "in", groupChunk)),
       () => {
         fetchExpensesForGroupIds(groupIds).then(onChange).catch(() => onChange([]));
       },

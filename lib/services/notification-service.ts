@@ -4,7 +4,6 @@ import {
   doc,
   getDocs,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -46,6 +45,10 @@ function mapActivity(id: string, data: Record<string, unknown>) {
     message: data.message,
     createdAt: serializeTimestamp(data.createdAt)
   } as Activity;
+}
+
+function sortByCreatedAtDesc<T extends { createdAt?: string }>(items: T[]) {
+  return [...items].sort((left, right) => (right.createdAt || "").localeCompare(left.createdAt || ""));
 }
 
 export async function createActivity(activity: Omit<Activity, "id" | "createdAt">) {
@@ -94,15 +97,22 @@ export function subscribeToNotifications(
   onChange: (items: NotificationItem[]) => void,
   onError?: (error: Error) => void
 ) {
-  logFirestoreDebug("subscribeToNotifications:start", { uid });
+  logFirestoreDebug("subscribeToNotifications:start", {
+    uid,
+    collection: "notifications",
+    field: "userId",
+    operator: "=="
+  });
   return onSnapshot(
-    query(collection(getFirebaseDb(), "notifications"), where("userId", "==", uid), orderBy("createdAt", "desc")),
+    query(collection(getFirebaseDb(), "notifications"), where("userId", "==", uid)),
     (snapshot) => {
-      logFirestoreDebug("subscribeToNotifications:update", { uid, docs: snapshot.docs.length });
-      onChange(snapshot.docs.map((entry) => mapNotification(entry.id, entry.data())));
+      const items = sortByCreatedAtDesc(snapshot.docs.map((entry) => mapNotification(entry.id, entry.data())));
+      logFirestoreDebug("subscribeToNotifications:update", { uid, docs: items.length });
+      onChange(items);
     },
     (error) => {
       logFirestoreError("subscribeToNotifications", error);
+      onChange([]);
       onError?.(error);
     }
   );
@@ -135,13 +145,11 @@ export function subscribeToActivities(
     try {
       const snapshots = await Promise.all(
         chunk(groupIds, 10).map((groupChunk) =>
-          getDocs(query(collection(getFirebaseDb(), "activities"), where("groupId", "in", groupChunk), orderBy("createdAt", "desc")))
+          getDocs(query(collection(getFirebaseDb(), "activities"), where("groupId", "in", groupChunk)))
         )
       );
 
-      return snapshots
-        .flatMap((snapshot) => snapshot.docs.map((entry) => mapActivity(entry.id, entry.data())))
-        .sort((left, right) => (right.createdAt || "").localeCompare(left.createdAt || ""));
+      return sortByCreatedAtDesc(snapshots.flatMap((snapshot) => snapshot.docs.map((entry) => mapActivity(entry.id, entry.data()))));
     } catch (error) {
       logFirestoreError("fetchActivities", error);
       throw error;
@@ -150,7 +158,7 @@ export function subscribeToActivities(
 
   const unsubscribers = chunk(groupIds, 10).map((groupChunk) =>
     onSnapshot(
-      query(collection(getFirebaseDb(), "activities"), where("groupId", "in", groupChunk), orderBy("createdAt", "desc")),
+      query(collection(getFirebaseDb(), "activities"), where("groupId", "in", groupChunk)),
       () => {
         fetchActivities().then(onChange).catch(() => onChange([]));
       },

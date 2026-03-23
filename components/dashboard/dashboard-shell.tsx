@@ -121,11 +121,7 @@ export function DashboardShell() {
 
   useEffect(() => {
     if (!profile) return;
-    const unsubscribe = subscribeToNotifications(
-      profile.uid,
-      setNotifications,
-      (error) => showFlash("error", firestoreMessage(error, "We couldn't load your notifications right now."))
-    );
+    const unsubscribe = subscribeToNotifications(profile.uid, setNotifications);
     return unsubscribe;
   }, [profile]);
 
@@ -269,6 +265,14 @@ export function DashboardShell() {
     setFlash({ tone, text });
   };
 
+  const upsertGroup = (group: Group) => {
+    setGroups((current) =>
+      [group, ...current.filter((entry) => entry.id !== group.id)].sort((left, right) =>
+        (right.updatedAt || "").localeCompare(left.updatedAt || "")
+      )
+    );
+  };
+
   const resetExpenseDraft = (group: Group | null) => {
     if (!group) {
       setExpenseDraft(emptyExpenseDraft(profile?.defaultCurrency || "USD"));
@@ -302,13 +306,14 @@ export function DashboardShell() {
     setFlash(null);
 
     try {
-      const groupId = await createGroup(groupForm, profile);
+      const group = await createGroup(groupForm, profile);
+      upsertGroup(group);
       setGroupForm({
         name: "",
         description: "",
         currency: profile.defaultCurrency
       });
-      setSelectedGroupId(groupId);
+      setSelectedGroupId(group.id);
       setTab("groups");
       showFlash("success", "Group created. Share the invite code or link with your friends.");
     } catch (error) {
