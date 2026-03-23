@@ -525,7 +525,7 @@ export function DashboardShell() {
     { key: "groups", label: "Groups", icon: <Users className="h-4 w-4" /> },
     { key: "expenses", label: "Expenses", icon: <ReceiptText className="h-4 w-4" /> },
     { key: "activity", label: "Activity", icon: <RefreshCcw className="h-4 w-4" /> },
-    { key: "notifications", label: "Notifications", icon: <Bell className="h-4 w-4" /> },
+    { key: "notifications", label: "Updates", icon: <Bell className="h-4 w-4" /> },
     { key: "profile", label: "Profile", icon: <UserCircle2 className="h-4 w-4" /> }
   ];
 
@@ -617,7 +617,7 @@ export function DashboardShell() {
                     Track groups, expenses, and balances in one place
                   </h2>
                   <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
-                    Create groups, split costs, track balances, and keep every shared expense organized in one place.
+                    Create groups, add shared expenses, and keep everyone aligned without chasing each payment by hand.
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-3">
@@ -681,7 +681,7 @@ export function DashboardShell() {
                     </div>
                   </SectionCard>
 
-                  <SectionCard title="Your groups" subtitle="Open balances, members, and shareable invite links.">
+                  <SectionCard title="Your groups" subtitle="The places where your shared spending lives.">
                     <div className="grid gap-4 md:grid-cols-2">
                       {groupSummaries.length ? (
                         groupSummaries.map((summary) => (
@@ -737,7 +737,7 @@ export function DashboardShell() {
                     </div>
                   </SectionCard>
 
-                  <SectionCard title="Unread notifications" subtitle="Recent updates that matter to you.">
+                  <SectionCard title="Recent updates" subtitle="Helpful changes across your groups, when they are available.">
                     <div className="space-y-3">
                       {notifications.length ? (
                         notifications.slice(0, 5).map((notification) => (
@@ -755,7 +755,7 @@ export function DashboardShell() {
                           </button>
                         ))
                       ) : (
-                        <EmptyState title="No notifications" text="Expense and group events that affect you will appear here." />
+                        <EmptyState title="Nothing new yet" text="When your groups have fresh updates, they will appear here." />
                       )}
                     </div>
                   </SectionCard>
@@ -800,7 +800,7 @@ export function DashboardShell() {
                     </form>
                   </SectionCard>
 
-                  <SectionCard title="Join by invite code" subtitle="Paste a code from a friend to enter their group instantly.">
+                  <SectionCard title="Join by invite code" subtitle="Paste a code from a friend to join the right group quickly.">
                     <form className="space-y-4" onSubmit={handleJoinGroup}>
                       <input
                         className="field uppercase"
@@ -815,7 +815,7 @@ export function DashboardShell() {
                     </form>
                   </SectionCard>
 
-                  <SectionCard title="Your group list" subtitle="Select a group to inspect members, expenses, and balances.">
+                  <SectionCard title="Your groups" subtitle="Select a group to view members, balances, and invite details.">
                     <div className="space-y-3">
                       {groups.length ? (
                         groups.map((group) => (
@@ -842,19 +842,32 @@ export function DashboardShell() {
                 <div className="space-y-4">
                   {selectedGroup && selectedGroupSummary ? (
                     <>
-                      <SectionCard title={selectedGroup.name} subtitle={selectedGroup.description || "Everything this group is sharing together."}>
+                      <SectionCard title={selectedGroup.name} subtitle={selectedGroup.description || "Everything this group is tracking together."}>
                         <div className="grid gap-4 md:grid-cols-[1fr_auto]">
                           <div className="rounded-[28px] bg-slate-950 p-5 text-white">
-                            <div className="text-xs uppercase tracking-[0.2em] text-white/60">Invite code</div>
-                            <div className="mt-2 text-2xl font-semibold tracking-[0.16em]">{selectedGroup.inviteCode}</div>
-                            <div className="mt-4 break-all rounded-2xl bg-white/10 px-4 py-3 text-sm">
-                              {selectedGroup.inviteUrl}
-                            </div>
+                            {selectedGroup.inviteCode && selectedGroup.inviteUrl ? (
+                              <>
+                                <div className="text-xs uppercase tracking-[0.2em] text-white/60">Invite code</div>
+                                <div className="mt-2 text-2xl font-semibold tracking-[0.16em]">{selectedGroup.inviteCode}</div>
+                                <div className="mt-4 break-all rounded-2xl bg-white/10 px-4 py-3 text-sm">
+                                  {selectedGroup.inviteUrl}
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="text-xs uppercase tracking-[0.2em] text-white/60">Invite access</div>
+                                <div className="mt-2 text-lg font-semibold">Invite details are being prepared.</div>
+                                <div className="mt-4 rounded-2xl bg-white/10 px-4 py-3 text-sm text-white/75">
+                                  Refresh the invite to generate a fresh code and share link.
+                                </div>
+                              </>
+                            )}
                           </div>
                           <div className="flex flex-col gap-3">
                             <button
                               type="button"
                               className="btn-secondary"
+                              disabled={!selectedGroup.inviteCode}
                               onClick={() => navigator.clipboard.writeText(selectedGroup.inviteCode)}
                             >
                               <Copy className="mr-2 h-4 w-4" />
@@ -863,6 +876,7 @@ export function DashboardShell() {
                             <button
                               type="button"
                               className="btn-secondary"
+                              disabled={!selectedGroup.inviteUrl}
                               onClick={() => navigator.clipboard.writeText(selectedGroup.inviteUrl)}
                             >
                               <Copy className="mr-2 h-4 w-4" />
@@ -887,7 +901,7 @@ export function DashboardShell() {
                         </div>
                       </SectionCard>
 
-                      <SectionCard title="Members" subtitle="Everyone currently participating in this group.">
+                      <SectionCard title="Members" subtitle="Everyone currently part of this group.">
                         <div className="grid gap-3 md:grid-cols-2">
                           {selectedGroup.memberIds.map((uid) => {
                             const member = memberMap.get(uid);
@@ -1147,7 +1161,7 @@ export function DashboardShell() {
             ) : null}
 
             {tab === "notifications" ? (
-              <SectionCard title="Notifications" subtitle="Updates for invites, group changes, and expenses.">
+              <SectionCard title="Updates" subtitle="A lightweight feed for group and expense changes.">
                 <div className="space-y-4">
                   {notifications.length ? (
                     notifications.map((notification) => (
@@ -1172,7 +1186,7 @@ export function DashboardShell() {
                       </button>
                     ))
                   ) : (
-                    <EmptyState title="No notifications" text="Important app events that affect you will appear here." />
+                    <EmptyState title="Nothing new yet" text="New group and expense updates will appear here when they are available." />
                   )}
                 </div>
               </SectionCard>
@@ -1180,7 +1194,7 @@ export function DashboardShell() {
 
             {tab === "profile" ? (
               <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
-                <SectionCard title="Profile" subtitle="Your Milau identity and default currency settings.">
+                <SectionCard title="Profile" subtitle="Keep your name and default currency up to date.">
                   <form className="space-y-4" onSubmit={handleSaveProfile}>
                     <input
                       className="field"
@@ -1211,7 +1225,7 @@ export function DashboardShell() {
                   </form>
                 </SectionCard>
 
-                <SectionCard title="Account details" subtitle="Your current account information and preferences.">
+                <SectionCard title="Account details" subtitle="The details your groups see and the currency you prefer.">
                   <div className="grid gap-4 md:grid-cols-2">
                     <DetailCard label="Display name" value={profile?.displayName || "Not set"} />
                     <DetailCard label="Email" value={profile?.email || "Not available"} />

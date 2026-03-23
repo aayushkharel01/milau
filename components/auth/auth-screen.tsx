@@ -54,6 +54,10 @@ export function AuthScreen() {
     }
   };
 
+  const jumpToAuth = () => {
+    document.getElementById("auth-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
   return (
     <main className="mx-auto min-h-screen max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <div className="glass overflow-hidden rounded-[36px]">
@@ -63,39 +67,58 @@ export function AuthScreen() {
               <div>
                 <p className="text-sm uppercase tracking-[0.3em] text-moss">Milau</p>
                 <h1 className="mt-4 max-w-3xl text-5xl font-semibold tracking-tight text-ink sm:text-6xl">
-                  Shared expenses that stay easy, even when life gets messy.
+                  Shared expense tracking that feels calm, clear, and easy to trust.
                 </h1>
               </div>
               <div className="hidden rounded-3xl border border-white/70 bg-white/80 px-4 py-3 text-sm text-slate-600 shadow-soft md:block">
-                Split smart. Stay close.
+                Keep the math gentle.
               </div>
             </div>
 
             <p className="max-w-2xl text-base leading-7 text-slate-600">
-              Real authentication, invite-link groups, four split modes, simplified debts, activity history,
-              notifications, profile settings, and mobile-friendly screens built for actual friend groups.
+              Create a group, add expenses, invite friends with a link, and keep balances readable without losing the
+              human side of sharing money.
             </p>
+
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <button type="button" className="btn-primary" onClick={jumpToAuth}>
+                Start with your first group <ArrowRight className="ml-2 h-4 w-4" />
+              </button>
+              <button type="button" className="btn-secondary" onClick={handleGoogle} disabled={submitting}>
+                Continue with Google
+              </button>
+            </div>
 
             <div className="grid gap-4 md:grid-cols-3">
               <FeatureCard
                 icon={<Wallet className="h-5 w-5" />}
-                title="Flexible splitting"
-                text="Equal, exact, percentages, or shares with automatic validation."
+                title="Clear splits"
+                text="Split equally, by exact amount, by percentage, or by shares with built-in checks."
               />
               <FeatureCard
                 icon={<Users className="h-5 w-5" />}
-                title="Invite-link groups"
-                text="Create a group once, share a join link, and keep everyone in sync."
+                title="Invite your people"
+                text="Start a group once, share the link, and keep everyone looking at the same balances."
               />
               <FeatureCard
                 icon={<ShieldCheck className="h-5 w-5" />}
-                title="Private groups"
-                text="Keep your shared expenses visible only to the people inside each group."
+                title="Private by default"
+                text="Your groups stay visible only to the people who belong in them."
               />
             </div>
           </section>
 
-          <section className="card self-start">
+          <section id="auth-card" className="card self-start">
+            <div>
+              <p className="text-sm uppercase tracking-[0.22em] text-moss">Get Started</p>
+              <h2 className="mt-3 text-3xl font-semibold tracking-tight text-ink">
+                Sign in once and pick up where your group left off.
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-slate-600">
+                Use email or Google to create your account, join a group, and keep your balances in one place.
+              </p>
+            </div>
+
             <div className="inline-flex rounded-2xl bg-slate-100 p-1">
               <button
                 type="button"
@@ -179,10 +202,10 @@ export function AuthScreen() {
             </button>
 
             <p className="mt-6 text-sm leading-6 text-slate-600">
-              Create groups, split costs, settle the awkward math, and keep everyone on the same page.
+              Milau is built for everyday shared spending: trips, rent, dinners, and all the small moments in between.
             </p>
             <div className="mt-6 flex items-center gap-2 text-sm font-medium text-moss">
-              Open Milau <ArrowRight className="h-4 w-4" />
+              Your groups, ready when you are <ArrowRight className="h-4 w-4" />
             </div>
           </section>
         </div>
