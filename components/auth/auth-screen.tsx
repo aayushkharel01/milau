@@ -18,7 +18,12 @@ export function AuthScreen() {
 
   useEffect(() => {
     if (!loading && firebaseUser) {
-      router.replace("/dashboard");
+      const nextPath =
+        typeof window !== "undefined" ? window.localStorage.getItem("milau-post-auth-path") || "/dashboard" : "/dashboard";
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("milau-post-auth-path");
+      }
+      router.replace(nextPath);
     }
   }, [firebaseUser, loading, router]);
 

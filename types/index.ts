@@ -55,12 +55,28 @@ export type Expense = {
   updatedAt?: string;
 };
 
+export type Settlement = {
+  id: string;
+  groupId: string;
+  fromUserId: string;
+  toUserId: string;
+  amount: number;
+  currency: CurrencyCode;
+  note?: string;
+  createdBy: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type ActivityType =
   | "group_created"
   | "member_joined"
+  | "member_left"
   | "expense_added"
   | "expense_updated"
-  | "expense_deleted";
+  | "expense_deleted"
+  | "settlement_added"
+  | "settlement_deleted";
 
 export type Activity = {
   id: string;
@@ -96,6 +112,7 @@ export type MemberBalance = {
 
 export type CounterpartyBalance = {
   uid: string;
+  currency: CurrencyCode;
   net: number;
 };
 
@@ -114,4 +131,13 @@ export type GroupFormValues = {
   name: string;
   description: string;
   currency: CurrencyCode;
+};
+
+export type SettlementFormValues = {
+  groupId: string;
+  fromUserId: string;
+  toUserId: string;
+  amount: number;
+  currency: CurrencyCode;
+  note?: string;
 };

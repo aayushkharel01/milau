@@ -30,7 +30,7 @@ function mapUserProfile(data: Record<string, unknown>) {
     email: data.email,
     displayName: data.displayName,
     photoURL: data.photoURL,
-    defaultCurrency: data.defaultCurrency,
+    defaultCurrency: (data.defaultCurrency || "USD") as CurrencyCode,
     createdAt: serializeTimestamp(data.createdAt),
     updatedAt: serializeTimestamp(data.updatedAt)
   } as UserProfile;
@@ -45,7 +45,6 @@ export async function ensureUserProfile(user: User) {
     email: user.email || "",
     displayName: user.displayName || user.email?.split("@")[0] || "Milau User",
     photoURL: user.photoURL || "",
-    defaultCurrency: "USD" as CurrencyCode,
     updatedAt: serverTimestamp()
   };
 
@@ -56,6 +55,7 @@ export async function ensureUserProfile(user: User) {
       logFirestoreDebug("ensureUserProfile:create", { uid: user.uid });
       await setDoc(ref, {
         ...payload,
+        defaultCurrency: "USD" as CurrencyCode,
         createdAt: serverTimestamp()
       });
       return;

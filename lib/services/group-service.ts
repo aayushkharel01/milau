@@ -7,6 +7,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -28,13 +29,13 @@ function serializeTimestamp(value: unknown) {
 function mapGroup(id: string, data: Record<string, unknown>) {
   return {
     id,
-    name: data.name,
-    description: data.description,
-    currency: data.currency,
-    createdBy: data.createdBy,
-    memberIds: data.memberIds,
-    inviteCode: data.inviteCode,
-    inviteUrl: data.inviteUrl,
+    name: typeof data.name === "string" ? data.name : "Untitled group",
+    description: typeof data.description === "string" ? data.description : "",
+    currency: typeof data.currency === "string" ? data.currency : "USD",
+    createdBy: typeof data.createdBy === "string" ? data.createdBy : "",
+    memberIds: Array.isArray(data.memberIds) ? (data.memberIds as string[]) : [],
+    inviteCode: typeof data.inviteCode === "string" ? data.inviteCode : "",
+    inviteUrl: typeof data.inviteUrl === "string" ? data.inviteUrl : "",
     createdAt: serializeTimestamp(data.createdAt),
     updatedAt: serializeTimestamp(data.updatedAt)
   } as Group;
@@ -47,10 +48,10 @@ function sortGroups(groups: Group[]) {
 function mapInvite(id: string, data: Record<string, unknown>) {
   return {
     code: id,
-    groupId: data.groupId,
-    createdBy: data.createdBy,
-    active: data.active,
-    url: data.url,
+    groupId: typeof data.groupId === "string" ? data.groupId : "",
+    createdBy: typeof data.createdBy === "string" ? data.createdBy : "",
+    active: Boolean(data.active),
+    url: typeof data.url === "string" ? data.url : "",
     createdAt: serializeTimestamp(data.createdAt),
     updatedAt: serializeTimestamp(data.updatedAt)
   } as GroupInvite;
@@ -209,9 +210,26 @@ export async function joinGroupByInviteCode(code: string, actor: UserProfile) {
       return group.id;
     }
 
-    await updateDoc(groupRef, {
-      memberIds: arrayUnion(actor.uid),
-      updatedAt: serverTimestamp()
+    await runTransaction(getFirebaseDb(), async (transaction) => {
+      const freshInviteSnapshot = await transaction.get(inviteRef);
+      if (!freshInviteSnapshot.exists()) {
+        throw new Error("That invite code no longer exists.");
+      }
+
+      const freshGroupSnapshot = await transaction.get(groupRef);
+      if (!freshGroupSnapshot.exists()) {
+        throw new Error("The group for this invite could not be found.");
+      }
+
+      const freshGroup = mapGroup(freshGroupSnapshot.id, freshGroupSnapshot.data());
+      if (freshGroup.memberIds.includes(actor.uid)) {
+        return;
+      }
+
+      transaction.update(groupRef, {
+        memberIds: arrayUnion(actor.uid),
+        updatedAt: serverTimestamp()
+      });
     });
 
     await createActivity({
@@ -232,6 +250,52 @@ export async function joinGroupByInviteCode(code: string, actor: UserProfile) {
     return group.id;
   } catch (error) {
     logFirestoreError("joinGroupByInviteCode", error);
+    throw error;
+  }
+}
+
+export async function leaveGroup(group: Group, actor: UserProfile, currentNet: number) {
+  if (!group.memberIds.includes(actor.uid)) {
+    throw new Error("You are not a member of this group.");
+  }
+
+  if (group.createdBy === actor.uid) {
+    throw new Error("The group owner cannot leave yet. Transfer or delete the group first.");
+  }
+
+  if (Math.abs(currentNet) > 0.01) {
+    throw new Error("You can only leave once your balance in this group is fully settled.");
+  }
+
+  if (group.memberIds.length <= 1) {
+    throw new Error("This group needs at least one member.");
+  }
+
+  const nextMemberIds = group.memberIds.filter((uid) => uid !== actor.uid);
+  logFirestoreDebug("leaveGroup:start", { groupId: group.id, actor: actor.uid });
+
+  try {
+    await updateDoc(doc(getFirebaseDb(), "groups", group.id), {
+      memberIds: nextMemberIds,
+      updatedAt: serverTimestamp()
+    });
+
+    await createActivity({
+      groupId: group.id,
+      actorId: actor.uid,
+      type: "member_left",
+      message: `${actor.displayName} left ${group.name}`
+    });
+
+    await createNotificationsForUsers(nextMemberIds, {
+      groupId: group.id,
+      type: "group",
+      title: "Member left",
+      body: `${actor.displayName} left ${group.name}.`,
+      link: "/dashboard"
+    });
+  } catch (error) {
+    logFirestoreError("leaveGroup", error);
     throw error;
   }
 }
@@ -275,6 +339,17 @@ export async function refreshGroupInvite(group: Group, actor: UserProfile) {
 
   logFirestoreDebug("refreshGroupInvite:start", { groupId: group.id, actor: actor.uid });
   try {
+    if (group.inviteCode) {
+      const previousInviteRef = doc(getFirebaseDb(), "invites", group.inviteCode);
+      const previousInviteSnapshot = await getDoc(previousInviteRef);
+      if (previousInviteSnapshot.exists()) {
+        await updateDoc(previousInviteRef, {
+          active: false,
+          updatedAt: serverTimestamp()
+        });
+      }
+    }
+
     await updateDoc(doc(getFirebaseDb(), "groups", group.id), {
       inviteCode,
       inviteUrl,

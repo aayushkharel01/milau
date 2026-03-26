@@ -25,13 +25,13 @@ function serializeTimestamp(value: unknown) {
 function mapNotification(id: string, data: Record<string, unknown>) {
   return {
     id,
-    userId: data.userId,
-    groupId: data.groupId,
-    title: data.title,
-    body: data.body,
+    userId: typeof data.userId === "string" ? data.userId : "",
+    groupId: typeof data.groupId === "string" ? data.groupId : undefined,
+    title: typeof data.title === "string" ? data.title : "",
+    body: typeof data.body === "string" ? data.body : "",
     read: data.read,
-    link: data.link,
-    type: data.type,
+    link: typeof data.link === "string" ? data.link : undefined,
+    type: data.type as NotificationItem["type"],
     createdAt: serializeTimestamp(data.createdAt)
   } as NotificationItem;
 }
@@ -39,10 +39,10 @@ function mapNotification(id: string, data: Record<string, unknown>) {
 function mapActivity(id: string, data: Record<string, unknown>) {
   return {
     id,
-    groupId: data.groupId,
-    actorId: data.actorId,
-    type: data.type,
-    message: data.message,
+    groupId: typeof data.groupId === "string" ? data.groupId : "",
+    actorId: typeof data.actorId === "string" ? data.actorId : "",
+    type: data.type as Activity["type"],
+    message: typeof data.message === "string" ? data.message : "",
     createdAt: serializeTimestamp(data.createdAt)
   } as Activity;
 }
@@ -69,10 +69,15 @@ export async function createNotificationsForUsers(
   userIds: string[],
   input: Pick<NotificationItem, "title" | "body" | "type" | "link" | "groupId">
 ) {
-  logFirestoreDebug("createNotificationsForUsers:start", { userIds, groupId: input.groupId, type: input.type });
+  const uniqueUserIds = Array.from(new Set(userIds.filter(Boolean)));
+  if (!uniqueUserIds.length) {
+    return;
+  }
+
+  logFirestoreDebug("createNotificationsForUsers:start", { userIds: uniqueUserIds, groupId: input.groupId, type: input.type });
   try {
     await Promise.all(
-      userIds.map(async (userId) => {
+      uniqueUserIds.map(async (userId) => {
         const ref = doc(collection(getFirebaseDb(), "notifications"));
         await setDoc(ref, {
           userId,

@@ -13,31 +13,40 @@ import {
   Plus,
   ReceiptText,
   RefreshCcw,
+  Send,
   Trash2,
   UserCircle2,
+  UserMinus,
   UserPlus,
-  Users,
-  Wallet
+  Users
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/providers/auth-provider";
 import { signOutUser } from "@/lib/services/auth-service";
 import { createExpense, deleteExpense, subscribeToExpenses, updateExpense } from "@/lib/services/expense-service";
-import { createGroup, fetchGroupsForUser, joinGroupByInviteCode, refreshGroupInvite, subscribeToGroups } from "@/lib/services/group-service";
+import { createGroup, fetchGroupsForUser, joinGroupByInviteCode, leaveGroup, refreshGroupInvite, subscribeToGroups } from "@/lib/services/group-service";
 import {
   markNotificationAsRead,
   subscribeToActivities,
   subscribeToNotifications
 } from "@/lib/services/notification-service";
+import {
+  createSettlement,
+  deleteSettlement,
+  subscribeToSettlements
+} from "@/lib/services/settlement-service";
 import { subscribeToUserProfiles, updateUserProfile } from "@/lib/services/user-service";
 import {
   calculateGroupBalances,
   calculateOverallBalances,
   currentUserTotals,
+  maxSettlementAmountForPair,
   normalizedShares,
+  sanitizeAmount,
+  settlementBoundsForGroup,
   simplifyDebts
 } from "@/lib/utils/balances";
-import { formatCurrency } from "@/lib/utils/currency";
+import { currencyLabels, currencyOptions, formatCurrency } from "@/lib/utils/currency";
 import { cn, dateTimeLabel, initials } from "@/lib/utils/helpers";
 import { firestoreMessage, userFacingMessage } from "@/lib/services/firestore-debug";
 import {
@@ -49,14 +58,14 @@ import {
   Group,
   GroupFormValues,
   NotificationItem,
+  Settlement,
+  SettlementFormValues,
   UserProfile
 } from "@/types";
 
 type TabKey = "overview" | "groups" | "expenses" | "activity" | "notifications" | "profile";
 type Flash = { tone: "success" | "error"; text: string } | null;
 type FlashTone = NonNullable<Flash>["tone"];
-
-const currencyOptions: CurrencyCode[] = ["USD", "EUR", "GBP", "INR", "NPR"];
 
 function buildParticipants(memberIds: string[], splitMode: ExpenseFormValues["splitMode"]) {
   const count = memberIds.length || 1;
@@ -79,6 +88,17 @@ function emptyExpenseDraft(currency: CurrencyCode): ExpenseFormValues {
   };
 }
 
+function emptySettlementDraft(currency: CurrencyCode): SettlementFormValues {
+  return {
+    groupId: "",
+    fromUserId: "",
+    toUserId: "",
+    amount: 0,
+    currency,
+    note: ""
+  };
+}
+
 export function DashboardShell() {
   const { profile, error: authError } = useAuth();
   const router = useRouter();
@@ -86,6 +106,7 @@ export function DashboardShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [memberProfiles, setMemberProfiles] = useState<UserProfile[]>([]);
@@ -94,8 +115,10 @@ export function DashboardShell() {
   const [submittingGroup, setSubmittingGroup] = useState(false);
   const [joiningGroup, setJoiningGroup] = useState(false);
   const [savingExpense, setSavingExpense] = useState(false);
+  const [savingSettlement, setSavingSettlement] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [refreshingInviteId, setRefreshingInviteId] = useState("");
+  const [leavingGroupId, setLeavingGroupId] = useState("");
   const [groupForm, setGroupForm] = useState<GroupFormValues>({
     name: "",
     description: "",
@@ -104,55 +127,64 @@ export function DashboardShell() {
   const [joinCode, setJoinCode] = useState("");
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
   const [expenseDraft, setExpenseDraft] = useState<ExpenseFormValues>(emptyExpenseDraft(profile?.defaultCurrency || "USD"));
+  const [settlementDraft, setSettlementDraft] = useState<SettlementFormValues>(emptySettlementDraft(profile?.defaultCurrency || "USD"));
   const [profileForm, setProfileForm] = useState({
     displayName: profile?.displayName || "",
     defaultCurrency: profile?.defaultCurrency || "USD"
   });
 
+  const showFlash = (tone: FlashTone, text: string) => {
+    setFlash({ tone, text });
+  };
+
   useEffect(() => {
     if (!profile) return;
-    const unsubscribe = subscribeToGroups(
+    return subscribeToGroups(
       profile.uid,
       setGroups,
       (error) => showFlash("error", firestoreMessage(error, "We couldn't load your groups right now."))
     );
-    return unsubscribe;
   }, [profile]);
 
   useEffect(() => {
     if (!profile) return;
-    const unsubscribe = subscribeToNotifications(profile.uid, setNotifications);
-    return unsubscribe;
+    return subscribeToNotifications(profile.uid, setNotifications);
   }, [profile]);
 
   useEffect(() => {
     const groupIds = groups.map((group) => group.id);
-    const unsubscribe = subscribeToExpenses(
+    return subscribeToExpenses(
       groupIds,
       setExpenses,
       (error) => showFlash("error", firestoreMessage(error, "We couldn't load your expenses right now."))
     );
-    return unsubscribe;
   }, [groups]);
 
   useEffect(() => {
     const groupIds = groups.map((group) => group.id);
-    const unsubscribe = subscribeToActivities(
+    return subscribeToSettlements(
+      groupIds,
+      setSettlements,
+      (error) => showFlash("error", firestoreMessage(error, "We couldn't load your settlements right now."))
+    );
+  }, [groups]);
+
+  useEffect(() => {
+    const groupIds = groups.map((group) => group.id);
+    return subscribeToActivities(
       groupIds,
       setActivities,
       (error) => showFlash("error", firestoreMessage(error, "We couldn't load your recent activity right now."))
     );
-    return unsubscribe;
   }, [groups]);
 
   useEffect(() => {
     const memberIds = Array.from(new Set(groups.flatMap((group) => group.memberIds)));
-    const unsubscribe = subscribeToUserProfiles(
+    return subscribeToUserProfiles(
       memberIds,
       setMemberProfiles,
       (error) => showFlash("error", firestoreMessage(error, "We couldn't load group members right now."))
     );
-    return unsubscribe;
   }, [groups]);
 
   useEffect(() => {
@@ -178,12 +210,13 @@ export function DashboardShell() {
     });
     setGroupForm((current) => ({
       ...current,
-      currency: profile.defaultCurrency
+      currency: current.name.trim() ? current.currency : profile.defaultCurrency
     }));
   }, [profile]);
 
+  const selectedGroup = groups.find((group) => group.id === selectedGroupId) || null;
+
   useEffect(() => {
-    const selectedGroup = groups.find((group) => group.id === selectedGroupId) || groups[0];
     if (!selectedGroup || editingExpenseId) return;
 
     setExpenseDraft({
@@ -196,9 +229,7 @@ export function DashboardShell() {
       participants: buildParticipants(selectedGroup.memberIds, "equal"),
       notes: ""
     });
-  }, [groups, selectedGroupId, editingExpenseId]);
-
-  const selectedGroup = groups.find((group) => group.id === selectedGroupId) || null;
+  }, [editingExpenseId, selectedGroup]);
 
   const memberMap = useMemo(() => {
     const map = new Map<string, UserProfile>();
@@ -217,30 +248,22 @@ export function DashboardShell() {
     return result;
   }, [memberMap]);
 
-  const selectedGroupExpenses = useMemo(
-    () =>
-      selectedGroup
-        ? expenses
-            .filter((expense) => expense.groupId === selectedGroup.id)
-            .sort((left, right) => (right.createdAt || "").localeCompare(left.createdAt || ""))
-        : [],
-    [expenses, selectedGroup]
-  );
-
   const groupSummaries = useMemo(
     () =>
       groups.map((group) => {
         const groupExpenses = expenses.filter((expense) => expense.groupId === group.id);
-        const balances = calculateGroupBalances(group, groupExpenses);
+        const groupSettlements = settlements.filter((settlement) => settlement.groupId === group.id);
+        const balances = calculateGroupBalances(group, groupExpenses, groupSettlements);
         return {
           group,
           expenses: groupExpenses,
+          settlements: groupSettlements,
           balances,
           transfers: simplifyDebts(balances),
           totalSpent: groupExpenses.reduce((sum, expense) => sum + expense.amount, 0)
         };
       }),
-    [expenses, groups]
+    [expenses, groups, settlements]
   );
 
   const selectedGroupSummary = selectedGroup
@@ -248,22 +271,51 @@ export function DashboardShell() {
     : null;
 
   const totals = useMemo(() => {
-    if (!profile) {
-      return { paid: 0, owes: 0, owed: 0, net: 0 };
-    }
-    return currentUserTotals(profile.uid, expenses);
-  }, [expenses, profile]);
+    if (!profile) return [];
+    return currentUserTotals(profile.uid, expenses, settlements);
+  }, [expenses, profile, settlements]);
 
   const counterpartBalances = useMemo<CounterpartyBalance[]>(() => {
     if (!profile) return [];
-    return calculateOverallBalances(profile.uid, expenses);
-  }, [expenses, profile]);
+    return calculateOverallBalances(profile.uid, expenses, settlements);
+  }, [expenses, profile, settlements]);
+
+  const selectedGroupNetForCurrentUser = useMemo(() => {
+    if (!selectedGroupSummary || !profile) return 0;
+    return selectedGroupSummary.balances.find((entry) => entry.uid === profile.uid)?.net || 0;
+  }, [profile, selectedGroupSummary]);
+
+  const settlementOptions = useMemo(() => {
+    if (!selectedGroupSummary) {
+      return { debtors: [], creditors: [] as Array<{ uid: string; net: number }> };
+    }
+    return settlementBoundsForGroup(selectedGroupSummary.group, selectedGroupSummary.expenses, selectedGroupSummary.settlements);
+  }, [selectedGroupSummary]);
+
+  useEffect(() => {
+    if (!selectedGroupSummary) {
+      setSettlementDraft(emptySettlementDraft(profile?.defaultCurrency || "USD"));
+      return;
+    }
+
+    const defaultTransfer = selectedGroupSummary.transfers[0];
+    setSettlementDraft((current) => ({
+      groupId: selectedGroupSummary.group.id,
+      currency: selectedGroupSummary.group.currency,
+      fromUserId:
+        current.groupId === selectedGroupSummary.group.id && current.fromUserId
+          ? current.fromUserId
+          : defaultTransfer?.from || settlementOptions.debtors[0]?.uid || "",
+      toUserId:
+        current.groupId === selectedGroupSummary.group.id && current.toUserId
+          ? current.toUserId
+          : defaultTransfer?.to || settlementOptions.creditors[0]?.uid || "",
+      amount: current.groupId === selectedGroupSummary.group.id ? current.amount : defaultTransfer?.amount || 0,
+      note: current.groupId === selectedGroupSummary.group.id ? current.note || "" : ""
+    }));
+  }, [profile, selectedGroupSummary, settlementOptions.creditors, settlementOptions.debtors]);
 
   const unreadNotifications = notifications.filter((item) => !item.read).length;
-
-  const showFlash = (tone: FlashTone, text: string) => {
-    setFlash({ tone, text });
-  };
 
   const upsertGroup = (group: Group) => {
     setGroups((current) =>
@@ -308,13 +360,7 @@ export function DashboardShell() {
     try {
       const group = await createGroup(groupForm, profile);
       const refreshedGroups = await fetchGroupsForUser(profile.uid);
-      const nextGroups = refreshedGroups.some((entry) => entry.id === group.id)
-        ? refreshedGroups
-        : [group, ...refreshedGroups];
-      console.info("[Milau] groups after create", nextGroups.map((entry) => entry.id));
-      setGroups(
-        nextGroups.sort((left, right) => (right.updatedAt || "").localeCompare(left.updatedAt || ""))
-      );
+      upsertGroup(refreshedGroups.find((entry) => entry.id === group.id) || group);
       setGroupForm({
         name: "",
         description: "",
@@ -371,6 +417,26 @@ export function DashboardShell() {
     }
   };
 
+  const handleLeaveGroup = async (group: Group) => {
+    if (!profile || !selectedGroupSummary) return;
+    const confirmed = window.confirm(`Leave "${group.name}"? You will need a fresh invite to rejoin.`);
+    if (!confirmed) return;
+
+    setLeavingGroupId(group.id);
+    setFlash(null);
+
+    try {
+      await leaveGroup(group, profile, selectedGroupNetForCurrentUser);
+      showFlash("success", `You left ${group.name}.`);
+      setSelectedGroupId("");
+      setTab("groups");
+    } catch (error) {
+      showFlash("error", userFacingMessage(error, "We couldn't leave that group right now."));
+    } finally {
+      setLeavingGroupId("");
+    }
+  };
+
   const handleExpenseGroupChange = (groupId: string) => {
     const group = groups.find((entry) => entry.id === groupId);
     if (!group) return;
@@ -380,7 +446,7 @@ export function DashboardShell() {
       ...current,
       groupId: group.id,
       currency: group.currency,
-      paidBy: group.memberIds.includes(current.paidBy) ? current.paidBy : group.memberIds[0],
+      paidBy: group.memberIds.includes(current.paidBy) ? current.paidBy : group.memberIds[0] || "",
       participants: buildParticipants(group.memberIds, current.splitMode)
     }));
   };
@@ -437,7 +503,8 @@ export function DashboardShell() {
     try {
       const payload: ExpenseFormValues = {
         ...expenseDraft,
-        amount: Number(expenseDraft.amount),
+        amount: sanitizeAmount(Number(expenseDraft.amount)),
+        currency: group.currency,
         description: expenseDraft.description.trim(),
         notes: expenseDraft.notes?.trim() || "",
         participants: expenseDraft.participants.map((participant) => ({
@@ -500,6 +567,61 @@ export function DashboardShell() {
     }
   };
 
+  const handleSaveSettlement = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!profile || !selectedGroupSummary) return;
+
+    setSavingSettlement(true);
+    setFlash(null);
+
+    try {
+      await createSettlement(
+        {
+          ...settlementDraft,
+          amount: sanitizeAmount(Number(settlementDraft.amount)),
+          currency: selectedGroupSummary.group.currency,
+          note: settlementDraft.note?.trim() || ""
+        },
+        profile,
+        memberNameMap,
+        selectedGroupSummary.group,
+        selectedGroupSummary.expenses,
+        selectedGroupSummary.settlements
+      );
+
+      const nextTransfer = selectedGroupSummary.transfers[0];
+      setSettlementDraft({
+        groupId: selectedGroupSummary.group.id,
+        fromUserId: nextTransfer?.from || "",
+        toUserId: nextTransfer?.to || "",
+        amount: nextTransfer?.amount || 0,
+        currency: selectedGroupSummary.group.currency,
+        note: ""
+      });
+      showFlash("success", "Settlement recorded.");
+    } catch (error) {
+      showFlash("error", userFacingMessage(error, "We couldn't record that settlement right now."));
+    } finally {
+      setSavingSettlement(false);
+    }
+  };
+
+  const handleDeleteSettlement = async (settlement: Settlement) => {
+    if (!profile) return;
+    const group = groups.find((entry) => entry.id === settlement.groupId);
+    if (!group) return;
+
+    const confirmed = window.confirm("Delete this settlement record?");
+    if (!confirmed) return;
+
+    try {
+      await deleteSettlement(settlement, profile, group.name);
+      showFlash("success", "Settlement deleted.");
+    } catch (error) {
+      showFlash("error", userFacingMessage(error, "We couldn't delete that settlement right now."));
+    }
+  };
+
   const handleSaveProfile = async (event: FormEvent) => {
     event.preventDefault();
     if (!profile) return;
@@ -528,6 +650,17 @@ export function DashboardShell() {
     { key: "notifications", label: "Updates", icon: <Bell className="h-4 w-4" /> },
     { key: "profile", label: "Profile", icon: <UserCircle2 className="h-4 w-4" /> }
   ];
+
+  const currentSettlementMax =
+    selectedGroupSummary && settlementDraft.fromUserId && settlementDraft.toUserId
+      ? maxSettlementAmountForPair(
+          selectedGroupSummary.group,
+          selectedGroupSummary.expenses,
+          selectedGroupSummary.settlements,
+          settlementDraft.fromUserId,
+          settlementDraft.toUserId
+        )
+      : 0;
 
   return (
     <main className="min-h-screen">
@@ -560,15 +693,24 @@ export function DashboardShell() {
                     <p className="text-sm text-white/70">{profile.email}</p>
                   </div>
                 </div>
-                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                  <div className="rounded-2xl bg-white/10 px-3 py-3">
-                    <div className="text-white/60">Owed</div>
-                    <div className="mt-1 font-semibold">{formatCurrency(totals.owed, profile.defaultCurrency)}</div>
-                  </div>
-                  <div className="rounded-2xl bg-white/10 px-3 py-3">
-                    <div className="text-white/60">You owe</div>
-                    <div className="mt-1 font-semibold">{formatCurrency(totals.owes, profile.defaultCurrency)}</div>
-                  </div>
+                <div className="mt-4 space-y-3 text-sm">
+                  {totals.length ? (
+                    totals.map((entry) => (
+                      <div key={entry.currency} className="rounded-2xl bg-white/10 px-3 py-3">
+                        <div className="text-white/60">{entry.currency}</div>
+                        <div className="mt-1 flex items-center justify-between gap-3">
+                          <span>You owe</span>
+                          <span className="font-semibold">{formatCurrency(entry.owes, entry.currency)}</span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between gap-3">
+                          <span>You are owed</span>
+                          <span className="font-semibold">{formatCurrency(entry.owed, entry.currency)}</span>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-2xl bg-white/10 px-3 py-3 text-white/70">No balances yet</div>
+                  )}
                 </div>
               </div>
             ) : null}
@@ -617,7 +759,7 @@ export function DashboardShell() {
                     Track groups, expenses, and balances in one place
                   </h2>
                   <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
-                    Create groups, add shared expenses, and keep everyone aligned without chasing each payment by hand.
+                    Group balances stay in each group&apos;s own currency, and settlements update the numbers right away.
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-3">
@@ -634,9 +776,9 @@ export function DashboardShell() {
 
               <div className="mt-6 grid gap-4 md:grid-cols-4">
                 <StatCard label="Groups" value={String(groups.length)} />
-                <StatCard label="Paid by you" value={formatCurrency(totals.paid, profile?.defaultCurrency || "USD")} />
-                <StatCard label="You are owed" value={formatCurrency(totals.owed, profile?.defaultCurrency || "USD")} />
-                <StatCard label="You owe" value={formatCurrency(totals.owes, profile?.defaultCurrency || "USD")} />
+                <StatCard label="Expenses" value={String(expenses.length)} />
+                <StatCard label="Settlements" value={String(settlements.length)} />
+                <StatCard label="Unread updates" value={String(unreadNotifications)} />
               </div>
 
               {flash ? (
@@ -656,21 +798,21 @@ export function DashboardShell() {
                 <div className="space-y-4">
                   <SectionCard
                     title="Overall balances"
-                    subtitle="Across all groups, this is the cleanest view of who owes you and who you owe."
+                    subtitle="Because Milau does not guess exchange rates, balances stay separated by currency."
                   >
                     <div className="space-y-3">
                       {counterpartBalances.length ? (
                         counterpartBalances.map((entry) => (
-                          <div key={entry.uid} className="rounded-[24px] border border-slate-200 bg-white p-4">
+                          <div key={`${entry.uid}-${entry.currency}`} className="rounded-[24px] border border-slate-200 bg-white p-4">
                             <div className="flex items-center justify-between gap-4">
                               <div>
                                 <div className="font-medium text-slate-900">{memberNameMap[entry.uid] || entry.uid}</div>
                                 <div className="mt-1 text-sm text-slate-500">
-                                  {entry.net >= 0 ? "Owes you overall" : "You owe them overall"}
+                                  {entry.net >= 0 ? "Owes you overall" : "You owe them overall"} in {entry.currency}
                                 </div>
                               </div>
                               <div className={cn("text-lg font-semibold", entry.net >= 0 ? "text-moss" : "text-coral")}>
-                                {formatCurrency(Math.abs(entry.net), profile?.defaultCurrency || "USD")}
+                                {formatCurrency(Math.abs(entry.net), entry.currency)}
                               </div>
                             </div>
                           </div>
@@ -705,7 +847,9 @@ export function DashboardShell() {
                                 {summary.group.memberIds.length} members
                               </span>
                             </div>
-                            <p className="mt-3 text-sm leading-6 text-slate-600">{summary.group.description || "Shared spending, all in one place."}</p>
+                            <p className="mt-3 text-sm leading-6 text-slate-600">
+                              {summary.group.description || "Shared spending, all in one place."}
+                            </p>
                             <div className="mt-4 flex items-center justify-between gap-3">
                               <div className="text-sm text-slate-500">Total spent</div>
                               <div className="font-semibold text-slate-900">
@@ -737,25 +881,30 @@ export function DashboardShell() {
                     </div>
                   </SectionCard>
 
-                  <SectionCard title="Recent updates" subtitle="Helpful changes across your groups, when they are available.">
+                  <SectionCard title="Personal totals" subtitle="A quick breakdown of what you paid, owe, and are owed per currency.">
                     <div className="space-y-3">
-                      {notifications.length ? (
-                        notifications.slice(0, 5).map((notification) => (
-                          <button
-                            key={notification.id}
-                            type="button"
-                            className={cn(
-                              "block w-full rounded-[24px] border p-4 text-left transition",
-                              notification.read ? "border-slate-200 bg-white" : "border-moss/20 bg-moss/5"
-                            )}
-                            onClick={() => markNotificationAsRead(notification.id)}
-                          >
-                            <div className="font-medium text-slate-900">{notification.title}</div>
-                            <div className="mt-1 text-sm text-slate-600">{notification.body}</div>
-                          </button>
+                      {totals.length ? (
+                        totals.map((entry) => (
+                          <div key={entry.currency} className="rounded-[24px] border border-slate-200 bg-white p-4">
+                            <div className="font-medium text-slate-900">{entry.currency}</div>
+                            <div className="mt-2 grid gap-2 text-sm text-slate-600">
+                              <div className="flex items-center justify-between gap-3">
+                                <span>Paid by you</span>
+                                <span className="font-semibold text-slate-900">{formatCurrency(entry.paid, entry.currency)}</span>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span>You owe</span>
+                                <span className="font-semibold text-slate-900">{formatCurrency(entry.owes, entry.currency)}</span>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span>You are owed</span>
+                                <span className="font-semibold text-slate-900">{formatCurrency(entry.owed, entry.currency)}</span>
+                              </div>
+                            </div>
+                          </div>
                         ))
                       ) : (
-                        <EmptyState title="Nothing new yet" text="When your groups have fresh updates, they will appear here." />
+                        <EmptyState title="Nothing to show yet" text="Your personal totals will appear after your first shared expense." />
                       )}
                     </div>
                   </SectionCard>
@@ -789,7 +938,7 @@ export function DashboardShell() {
                       >
                         {currencyOptions.map((currency) => (
                           <option key={currency} value={currency}>
-                            {currency}
+                            {currencyLabels[currency]}
                           </option>
                         ))}
                       </select>
@@ -815,7 +964,7 @@ export function DashboardShell() {
                     </form>
                   </SectionCard>
 
-                  <SectionCard title="Your groups" subtitle="Select a group to view members, balances, and invite details.">
+                  <SectionCard title="Your groups" subtitle="Select a group to view members, balances, invite details, and settlements.">
                     <div className="space-y-3">
                       {groups.length ? (
                         groups.map((group) => (
@@ -829,7 +978,9 @@ export function DashboardShell() {
                             onClick={() => setSelectedGroupId(group.id)}
                           >
                             <div className="font-medium text-slate-900">{group.name}</div>
-                            <div className="mt-1 text-sm text-slate-500">{group.memberIds.length} members</div>
+                            <div className="mt-1 text-sm text-slate-500">
+                              {group.memberIds.length} members • {group.currency}
+                            </div>
                           </button>
                         ))
                       ) : (
@@ -845,30 +996,23 @@ export function DashboardShell() {
                       <SectionCard title={selectedGroup.name} subtitle={selectedGroup.description || "Everything this group is tracking together."}>
                         <div className="grid gap-4 md:grid-cols-[1fr_auto]">
                           <div className="rounded-[28px] bg-slate-950 p-5 text-white">
-                            {selectedGroup.inviteCode && selectedGroup.inviteUrl ? (
-                              <>
-                                <div className="text-xs uppercase tracking-[0.2em] text-white/60">Invite code</div>
-                                <div className="mt-2 text-2xl font-semibold tracking-[0.16em]">{selectedGroup.inviteCode}</div>
-                                <div className="mt-4 break-all rounded-2xl bg-white/10 px-4 py-3 text-sm">
-                                  {selectedGroup.inviteUrl}
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <div className="text-xs uppercase tracking-[0.2em] text-white/60">Invite access</div>
-                                <div className="mt-2 text-lg font-semibold">Invite details are being prepared.</div>
-                                <div className="mt-4 rounded-2xl bg-white/10 px-4 py-3 text-sm text-white/75">
-                                  Refresh the invite to generate a fresh code and share link.
-                                </div>
-                              </>
-                            )}
+                            <div className="text-xs uppercase tracking-[0.2em] text-white/60">Group currency</div>
+                            <div className="mt-2 text-xl font-semibold">{selectedGroup.currency}</div>
+                            <div className="mt-4 text-xs uppercase tracking-[0.2em] text-white/60">Invite code</div>
+                            <div className="mt-2 text-2xl font-semibold tracking-[0.16em]">{selectedGroup.inviteCode || "Pending"}</div>
+                            <div className="mt-4 break-all rounded-2xl bg-white/10 px-4 py-3 text-sm">
+                              {selectedGroup.inviteUrl || "Invite link not ready yet."}
+                            </div>
                           </div>
                           <div className="flex flex-col gap-3">
                             <button
                               type="button"
                               className="btn-secondary"
                               disabled={!selectedGroup.inviteCode}
-                              onClick={() => navigator.clipboard.writeText(selectedGroup.inviteCode)}
+                              onClick={async () => {
+                                await navigator.clipboard.writeText(selectedGroup.inviteCode);
+                                showFlash("success", "Invite code copied.");
+                              }}
                             >
                               <Copy className="mr-2 h-4 w-4" />
                               Copy code
@@ -877,7 +1021,10 @@ export function DashboardShell() {
                               type="button"
                               className="btn-secondary"
                               disabled={!selectedGroup.inviteUrl}
-                              onClick={() => navigator.clipboard.writeText(selectedGroup.inviteUrl)}
+                              onClick={async () => {
+                                await navigator.clipboard.writeText(selectedGroup.inviteUrl);
+                                showFlash("success", "Invite link copied.");
+                              }}
                             >
                               <Copy className="mr-2 h-4 w-4" />
                               Copy link
@@ -896,9 +1043,33 @@ export function DashboardShell() {
                                 )}
                                 Refresh invite
                               </button>
-                            ) : null}
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={() => handleLeaveGroup(selectedGroup)}
+                                disabled={leavingGroupId === selectedGroup.id}
+                              >
+                                {leavingGroupId === selectedGroup.id ? (
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                  <UserMinus className="mr-2 h-4 w-4" />
+                                )}
+                                Leave group
+                              </button>
+                            )}
                           </div>
                         </div>
+                        {selectedGroup.createdBy !== profile?.uid ? (
+                          <p className="mt-4 text-sm text-slate-500">
+                            You can leave once your balance is exactly settled. Current net:{" "}
+                            {formatCurrency(selectedGroupNetForCurrentUser, selectedGroup.currency)}
+                          </p>
+                        ) : (
+                          <p className="mt-4 text-sm text-slate-500">
+                            Group owners keep invite access. Ownership transfer and deletion are not part of this MVP yet.
+                          </p>
+                        )}
                       </SectionCard>
 
                       <SectionCard title="Members" subtitle="Everyone currently part of this group.">
@@ -912,7 +1083,10 @@ export function DashboardShell() {
                                     {initials(member?.displayName || uid)}
                                   </div>
                                   <div>
-                                    <div className="font-medium text-slate-900">{member?.displayName || uid}</div>
+                                    <div className="font-medium text-slate-900">
+                                      {member?.displayName || uid}
+                                      {uid === selectedGroup.createdBy ? " • Owner" : ""}
+                                    </div>
                                     <div className="text-sm text-slate-500">{member?.email || "Member"}</div>
                                   </div>
                                 </div>
@@ -922,13 +1096,12 @@ export function DashboardShell() {
                         </div>
                       </SectionCard>
 
-                      <SectionCard title="Group balances" subtitle="Each member’s running net position in this group.">
+                      <SectionCard title="Group balances" subtitle="Each member’s running net position in this group, after expenses and settlements.">
                         <div className="grid gap-3 md:grid-cols-2">
                           {selectedGroupSummary.balances.map((balance) => (
                             <div key={balance.uid} className="rounded-[24px] border border-slate-200 bg-white p-4">
                               <div className="font-medium text-slate-900">{memberNameMap[balance.uid] || balance.uid}</div>
                               <div className={cn("mt-2 text-lg font-semibold", balance.net >= 0 ? "text-moss" : "text-coral")}>
-                                {balance.net >= 0 ? "+" : ""}
                                 {formatCurrency(balance.net, selectedGroup.currency)}
                               </div>
                             </div>
@@ -936,28 +1109,146 @@ export function DashboardShell() {
                         </div>
                       </SectionCard>
 
-                      <SectionCard title="Simplified debts" subtitle="The fewest transfers needed to settle this group right now.">
+                      <SectionCard title="Suggested settle up" subtitle="The fewest transfers needed to settle this group right now.">
                         <div className="space-y-3">
                           {selectedGroupSummary.transfers.length ? (
                             selectedGroupSummary.transfers.map((transfer) => (
-                              <div key={`${transfer.from}-${transfer.to}`} className="rounded-[24px] border border-slate-200 bg-white p-4">
+                              <button
+                                key={`${transfer.from}-${transfer.to}`}
+                                type="button"
+                                className="block w-full rounded-[24px] border border-slate-200 bg-white p-4 text-left"
+                                onClick={() =>
+                                  setSettlementDraft({
+                                    groupId: selectedGroup.id,
+                                    fromUserId: transfer.from,
+                                    toUserId: transfer.to,
+                                    amount: transfer.amount,
+                                    currency: selectedGroup.currency,
+                                    note: ""
+                                  })
+                                }
+                              >
                                 <div className="font-medium text-slate-900">
                                   {memberNameMap[transfer.from] || transfer.from} pays {memberNameMap[transfer.to] || transfer.to}
                                 </div>
                                 <div className="mt-1 text-sm text-slate-500">
                                   {formatCurrency(transfer.amount, selectedGroup.currency)}
                                 </div>
-                              </div>
+                              </button>
                             ))
                           ) : (
                             <EmptyState title="Already balanced" text="No simplified transfers are needed right now." />
                           )}
                         </div>
                       </SectionCard>
+
+                      <SectionCard title="Settle up" subtitle="Record a manual payment so balances update immediately.">
+                        {selectedGroupSummary.transfers.length || settlementOptions.debtors.length ? (
+                          <form className="space-y-4" onSubmit={handleSaveSettlement}>
+                            <div className="grid gap-4 sm:grid-cols-2">
+                              <select
+                                className="field"
+                                value={settlementDraft.fromUserId}
+                                onChange={(event) =>
+                                  setSettlementDraft((current) => ({ ...current, fromUserId: event.target.value }))
+                                }
+                              >
+                                <option value="">Who paid?</option>
+                                {settlementOptions.debtors.map((entry) => (
+                                  <option key={entry.uid} value={entry.uid}>
+                                    {memberNameMap[entry.uid] || entry.uid}
+                                  </option>
+                                ))}
+                              </select>
+                              <select
+                                className="field"
+                                value={settlementDraft.toUserId}
+                                onChange={(event) =>
+                                  setSettlementDraft((current) => ({ ...current, toUserId: event.target.value }))
+                                }
+                              >
+                                <option value="">Who received it?</option>
+                                {settlementOptions.creditors.map((entry) => (
+                                  <option key={entry.uid} value={entry.uid}>
+                                    {memberNameMap[entry.uid] || entry.uid}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="grid gap-4 sm:grid-cols-[1fr_180px]">
+                              <input
+                                className="field"
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                placeholder={`Amount in ${selectedGroup.currency}`}
+                                value={settlementDraft.amount || ""}
+                                onChange={(event) =>
+                                  setSettlementDraft((current) => ({ ...current, amount: Number(event.target.value) }))
+                                }
+                              />
+                              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                                Max valid:{" "}
+                                <span className="font-semibold text-slate-900">
+                                  {formatCurrency(currentSettlementMax, selectedGroup.currency)}
+                                </span>
+                              </div>
+                            </div>
+                            <textarea
+                              className="field min-h-24"
+                              placeholder="Optional note"
+                              value={settlementDraft.note}
+                              onChange={(event) => setSettlementDraft((current) => ({ ...current, note: event.target.value }))}
+                            />
+                            <button type="submit" className="btn-primary" disabled={savingSettlement}>
+                              {savingSettlement ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                              Record settlement
+                            </button>
+                          </form>
+                        ) : (
+                          <EmptyState title="Nothing to settle right now" text="As soon as the group has open balances, you can record a partial or full payment here." />
+                        )}
+                      </SectionCard>
+
+                      <SectionCard title="Settlement history" subtitle="Manual payments that have already been recorded for this group.">
+                        <div className="space-y-4">
+                          {selectedGroupSummary.settlements.length ? (
+                            selectedGroupSummary.settlements.map((settlement) => (
+                              <div key={settlement.id} className="rounded-[28px] border border-slate-200 bg-white p-5">
+                                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                                  <div>
+                                    <div className="text-xl font-semibold text-slate-900">
+                                      {memberNameMap[settlement.fromUserId] || settlement.fromUserId} paid{" "}
+                                      {memberNameMap[settlement.toUserId] || settlement.toUserId}
+                                    </div>
+                                    <div className="mt-2 text-sm text-slate-500">{dateTimeLabel(settlement.createdAt)}</div>
+                                    {settlement.note ? <div className="mt-2 text-sm text-slate-600">{settlement.note}</div> : null}
+                                  </div>
+                                  <div className="text-right">
+                                    <div className="rounded-full bg-moss/10 px-4 py-2 text-sm font-semibold text-moss">
+                                      {formatCurrency(settlement.amount, settlement.currency)}
+                                    </div>
+                                    {settlement.createdBy === profile?.uid ? (
+                                      <div className="mt-2 flex justify-end gap-2">
+                                        <button type="button" className="btn-secondary" onClick={() => handleDeleteSettlement(settlement)}>
+                                          <Trash2 className="mr-2 h-4 w-4" />
+                                          Delete
+                                        </button>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              </div>
+                            ))
+                          ) : (
+                            <EmptyState title="No settlements yet" text="Recorded payments will appear here once someone settles part or all of a balance." />
+                          )}
+                        </div>
+                      </SectionCard>
                     </>
                   ) : (
                     <SectionCard title="Group detail" subtitle="Select a group from the left to inspect it.">
-                      <EmptyState title="No group selected" text="Create or join a group to see members, invite links, and balances." />
+                      <EmptyState title="No group selected" text="Create or join a group to see members, invite links, balances, and settle-up tools." />
                     </SectionCard>
                   )}
                 </div>
@@ -968,7 +1259,7 @@ export function DashboardShell() {
               <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
                 <SectionCard
                   title={editingExpenseId ? "Edit expense" : "Add expense"}
-                  subtitle="Equal, exact, percentage, and share-based splits all validate before saving."
+                  subtitle="Every expense uses its group&apos;s currency and validates splits before saving."
                 >
                   {groups.length ? (
                     <form className="space-y-4" onSubmit={handleSaveExpense}>
@@ -1006,6 +1297,12 @@ export function DashboardShell() {
                             </option>
                           ))}
                         </select>
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                        Currency:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {groups.find((group) => group.id === expenseDraft.groupId)?.currency || expenseDraft.currency}
+                        </span>
                       </div>
                       <select
                         className="field"
@@ -1080,7 +1377,7 @@ export function DashboardShell() {
                   )}
                 </SectionCard>
 
-                <SectionCard title="Expense history" subtitle="Every saved expense is editable and deletable by its creator.">
+                <SectionCard title="Expense history" subtitle="Every saved expense shows its split and stays editable by its creator.">
                   <div className="space-y-4">
                     {expenses.length ? (
                       expenses.map((expense) => {
@@ -1137,7 +1434,7 @@ export function DashboardShell() {
             ) : null}
 
             {tab === "activity" ? (
-              <SectionCard title="Activity feed" subtitle="A clear history of the changes happening across your groups.">
+              <SectionCard title="Activity feed" subtitle="A clear history of group joins, expenses, and settlements.">
                 <div className="space-y-4">
                   {activities.length ? (
                     activities.map((activity) => (
@@ -1154,14 +1451,14 @@ export function DashboardShell() {
                       </div>
                     ))
                   ) : (
-                    <EmptyState title="No activity yet" text="Group creation, joins, and expense changes will appear here." />
+                    <EmptyState title="No activity yet" text="Group creation, joins, expense changes, and settlements will appear here." />
                   )}
                 </div>
               </SectionCard>
             ) : null}
 
             {tab === "notifications" ? (
-              <SectionCard title="Updates" subtitle="A lightweight feed for group and expense changes.">
+              <SectionCard title="Updates" subtitle="A lightweight feed for group, expense, and settlement changes.">
                 <div className="space-y-4">
                   {notifications.length ? (
                     notifications.map((notification) => (
@@ -1194,7 +1491,7 @@ export function DashboardShell() {
 
             {tab === "profile" ? (
               <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
-                <SectionCard title="Profile" subtitle="Keep your name and default currency up to date.">
+                <SectionCard title="Profile" subtitle="Keep your name and preferred default currency up to date.">
                   <form className="space-y-4" onSubmit={handleSaveProfile}>
                     <input
                       className="field"
@@ -1214,7 +1511,7 @@ export function DashboardShell() {
                     >
                       {currencyOptions.map((currency) => (
                         <option key={currency} value={currency}>
-                          {currency}
+                          {currencyLabels[currency]}
                         </option>
                       ))}
                     </select>
@@ -1225,7 +1522,7 @@ export function DashboardShell() {
                   </form>
                 </SectionCard>
 
-                <SectionCard title="Account details" subtitle="The details your groups see and the currency you prefer.">
+                <SectionCard title="Account details" subtitle="The details your groups see and the currency you prefer when creating new groups.">
                   <div className="grid gap-4 md:grid-cols-2">
                     <DetailCard label="Display name" value={profile?.displayName || "Not set"} />
                     <DetailCard label="Email" value={profile?.email || "Not available"} />

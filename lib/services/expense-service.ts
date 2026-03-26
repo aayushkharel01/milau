@@ -28,15 +28,15 @@ function serializeTimestamp(value: unknown) {
 function mapExpense(id: string, data: Record<string, unknown>) {
   return {
     id,
-    groupId: data.groupId,
-    description: data.description,
+    groupId: typeof data.groupId === "string" ? data.groupId : "",
+    description: typeof data.description === "string" ? data.description : "Untitled expense",
     amount: Number(data.amount),
-    currency: data.currency,
-    paidBy: data.paidBy,
-    splitMode: data.splitMode,
-    participants: data.participants,
-    notes: data.notes,
-    createdBy: data.createdBy,
+    currency: typeof data.currency === "string" ? data.currency : "USD",
+    paidBy: typeof data.paidBy === "string" ? data.paidBy : "",
+    splitMode: data.splitMode as Expense["splitMode"],
+    participants: Array.isArray(data.participants) ? (data.participants as Expense["participants"]) : [],
+    notes: typeof data.notes === "string" ? data.notes : "",
+    createdBy: typeof data.createdBy === "string" ? data.createdBy : "",
     createdAt: serializeTimestamp(data.createdAt),
     updatedAt: serializeTimestamp(data.updatedAt)
   } as Expense;
@@ -49,6 +49,14 @@ function sortExpenses(expenses: Expense[]) {
 function ensureExpenseInput(input: ExpenseFormValues, group: Group) {
   if (!input.description.trim()) {
     throw new Error("Please enter an expense description.");
+  }
+
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    throw new Error("Expense amount must be greater than zero.");
+  }
+
+  if (input.currency !== group.currency) {
+    throw new Error("Expenses must use the group's currency.");
   }
 
   if (!group.memberIds.includes(input.paidBy)) {
@@ -98,6 +106,7 @@ export async function createExpense(
     await setDoc(ref, {
       ...input,
       description: input.description.trim(),
+      currency: group.currency,
       notes: input.notes?.trim() || "",
       createdBy: actor.uid,
       createdAt: serverTimestamp(),
@@ -132,6 +141,7 @@ export async function updateExpense(
     await updateDoc(doc(getFirebaseDb(), "expenses", expenseId), {
       ...input,
       description: input.description.trim(),
+      currency: group.currency,
       notes: input.notes?.trim() || "",
       updatedAt: serverTimestamp()
     });
